@@ -488,6 +488,8 @@ The Python response includes a `result` object containing the verdict estimate, 
 
 The inference service runs a Hugging Face Transformers `image-classification` pipeline using the configured model. The Python code requests CPU execution and loads the pipeline during application startup.
 
+The model card describes the classifier as a fine-tuned SigLIP image classifier with `ai` and `hum` labels; it reports 99.23% accuracy on its own test set and also notes that users have reported overfitting. Those are upstream model-card statements, not an independent evaluation of SPECTRA or a guarantee of real-world accuracy. Some interface text currently labels the model as “ViT-B16”; that naming should be checked and corrected to match the actual loaded model architecture.
+
 The mapping logic recognizes a set of strings for AI-related and human-related classes. It then evaluates the mapped scores against a 0.70 threshold.
 
 This is a basic decision rule, with several implications:
@@ -538,6 +540,8 @@ Before analyzing sensitive material, review where the Node.js and Python service
 ## Docker Deployment
 
 The repository's `Dockerfile` builds the **Python inference service**. It does not, by itself, containerize the full two-service system or start `server.ts`.
+
+The Dockerfile currently has a shell-quoting issue in its PyTorch install command: unquoted arguments such as `torch>=2.2.0` can be interpreted by the shell as output redirections instead of version constraints. Quote the requirement strings (for example, `'torch>=2.2.0'` and `'torchvision>=0.17.0'`) before relying on that command for reproducible dependency installation.
 
 The Dockerfile:
 
@@ -608,6 +612,7 @@ The current Python implementation stores its initial load error and does not aut
 - There is no test suite or CI workflow in the inspected repository tree.
 - No open-source license file is present in the inspected root.
 - Frontend pages load some libraries and design assets through external CDNs, so offline operation and strict content-security policies require additional work.
+- `package.json` includes `@google/genai` and `metadata.json` declares a server-side Gemini capability, but no Gemini API invocation was found in the inspected application source; either implement the advertised integration or remove stale dependency/capability declarations.
 
 ## Security Considerations
 
