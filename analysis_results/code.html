@@ -571,15 +571,15 @@
         } else if (r.verdict === 'AI-Generated') {
           verdictColor = '#F5A33B';
           headlineText = 'LIKELY AI-GENERATED (MODEL ESTIMATE)';
-          narrativeText = 'Statistical neural model estimates synthetic pattern characteristics exceeding the 70.0% directional threshold. This prediction is a model estimate, not conclusive forensic proof. Real studio portraits, aggressive downsampling, and professional lighting can produce false-positive classifications; corroborating forensic review is required.';
+          narrativeText = 'The classifier estimates synthetic image characteristics with at least 70% AI score and a 20-point lead over the human class. This is a model estimate, not conclusive forensic proof. Real studio portraits, aggressive downsampling, and professional lighting can produce false positives; corroborating forensic review is required.';
         } else if (r.verdict === 'Human-Created') {
           verdictColor = '#10B981';
           headlineText = 'LIKELY HUMAN-CREATED (MODEL ESTIMATE)';
-          narrativeText = 'Statistical neural model estimates natural camera capture signatures exceeding the 70.0% directional threshold. This prediction is an algorithmic model estimate and does not provide conclusive proof of authentic origin.';
+          narrativeText = 'The classifier estimates natural-image characteristics with at least 70% human score and a 20-point lead over the AI class. This is an algorithmic model estimate and does not provide conclusive proof of authentic origin.';
         } else if (r.verdict === 'Inconclusive') {
           verdictColor = '#38BDF8';
           headlineText = 'INCONCLUSIVE ESTIMATE';
-          narrativeText = 'Model output falls within the 30%–70% marginal boundary. Neural classifier cannot determine origin with sufficient confidence. Independent forensic scrutiny required.';
+          narrativeText = 'The model is uncertain: its top class is below 70% or the AI and human scores are too close. This is not a failure; the image is outside a reliable decision boundary and needs independent review.';
         }
 
         if (verdictHeadline) verdictHeadline.textContent = headlineText;

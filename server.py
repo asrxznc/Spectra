@@ -47,34 +47,38 @@ log = logging.getLogger("spectra")
 # ---------------------------------------------------------------------------
 _model_lock = threading.Lock()
 _pipeline = None
+_processor = None
 _model_error: Optional[str] = None
 
 
 def _load_model() -> None:
-    global _pipeline, _model_error
+    global _pipeline, _processor, _model_error
     with _model_lock:
-        if _pipeline is not None or _model_error is not None:
+        if _pipeline is not None and _processor is not None:
             return
         try:
             log.info("Loading model %s...", MODEL_ID)
-            from transformers import pipeline as hf_pipeline
-            _pipeline = hf_pipeline(
-                "image-classification",
-                model=MODEL_ID,
-                device=-1,   # CPU
-            )
+            from transformers import AutoImageProcessor, AutoModelForImageClassification
+
+            # Use the model's declared id2label mapping instead of relying on
+            # pipeline label formatting, which can vary between Transformers versions.
+            _processor = AutoImageProcessor.from_pretrained(MODEL_ID)
+            _pipeline = AutoModelForImageClassification.from_pretrained(MODEL_ID)
+            _pipeline.eval()
             log.info("Model loaded successfully.")
         except Exception as exc:
+            _pipeline = None
+            _processor = None
             _model_error = f"{type(exc).__name__}: {exc}"
             log.error("Model failed to load: %s", _model_error)
 
 
 def get_pipeline():
-    if _pipeline is None and _model_error is None:
+    if (_pipeline is None or _processor is None) and _model_error is None:
         _load_model()
     if _model_error:
         raise RuntimeError(f"Model unavailable: {_model_error}")
-    return _pipeline
+    return _pipeline, _processor
 
 
 # ---------------------------------------------------------------------------
@@ -82,25 +86,63 @@ def get_pipeline():
 # ---------------------------------------------------------------------------
 
 def _classify(image: Image.Image) -> Dict[str, Any]:
-    pipe = get_pipeline()
-    raw: List[Dict] = pipe(image)
+    import torch
+
+    model, processor = get_pipeline()
+    views = [image, ImageOps.mirror(image)]
+    view_probabilities: List[List[float]] = []
+
+    with torch.inference_mode():
+        for view in views:
+            inputs = processor(images=view, return_tensors="pt")
+            outputs = model(**inputs)
+            probabilities = torch.softmax(outputs.logits, dim=-1)[0].tolist()
+            view_probabilities.append([float(score) for score in probabilities])
+
+    if not view_probabilities:
+        raise RuntimeError("The classifier returned no prediction views.")
+
+    class_count = len(view_probabilities[0])
+    averaged = [
+        sum(view[index] for view in view_probabilities) / len(view_probabilities)
+        for index in range(class_count)
+    ]
+    labels = getattr(model.config, "id2label", {}) or {}
+
+    def label_for(index: int) -> str:
+        return str(labels.get(index, labels.get(str(index), f"LABEL_{index}"))).strip().lower()
+
+    raw = [
+        {"label": label_for(index), "score": round(score, 6)}
+        for index, score in enumerate(averaged)
+    ]
+    raw.sort(key=lambda item: item["score"], reverse=True)
 
     scores: Dict[str, float] = {}
     for item in raw:
-        label = item["label"].strip().lower()
-        if label in ("ai", "artificial", "ai-generated", "fake"):
+        label = item["label"]
+        if label in ("ai", "artificial", "ai-generated", "fake", "synthetic"):
             scores["ai"] = item["score"]
-        elif label in ("hum", "human", "human-created", "real"):
+        elif label in ("hum", "human", "human-created", "real", "natural"):
             scores["human"] = item["score"]
-        else:
-            scores[label] = item["score"]
 
-    ai_score_raw = scores.get("ai", 0.0)
-    human_score_raw = scores.get("human", 1.0 - ai_score_raw)
+    if "ai" not in scores or "human" not in scores:
+        raise RuntimeError(
+            "The classifier returned unexpected labels: "
+            + ", ".join(item["label"] for item in raw)
+        )
 
-    if ai_score_raw >= CONFIDENCE_THRESHOLD:
+    ai_score_raw = scores["ai"]
+    human_score_raw = scores["human"]
+    top_score = max(ai_score_raw, human_score_raw)
+    score_margin = abs(ai_score_raw - human_score_raw)
+
+    # Require both a strong top score and separation from the other class.
+    # This reduces brittle verdicts on ordinary images outside the training domain.
+    directional = top_score >= CONFIDENCE_THRESHOLD and score_margin >= 0.20
+    if directional and ai_score_raw >= human_score_raw:
         verdict = "AI-Generated"
-    elif human_score_raw >= CONFIDENCE_THRESHOLD:
+    elif directional and human_score_raw > ai_score_raw:
         verdict = "Human-Created"
     else:
         verdict = "Inconclusive"
@@ -121,15 +163,19 @@ def _classify(image: Image.Image) -> Dict[str, Any]:
             "human": human_score_raw,
         },
         "raw_labels": raw,
+        "top_score": round(top_score, 6),
+        "score_margin": round(score_margin, 6),
+        "inference_views": len(view_probabilities),
         "threshold_used": CONFIDENCE_THRESHOLD,
         "model_id": MODEL_ID,
         "disclaimer": (
             f"Classifier scores represent statistical model estimates from {MODEL_ID}, "
             "not conclusive forensic proof of authentic origin or manipulation. "
             "Single-model vision classifiers have documented domain-shift limitations and can produce "
-            "false positives on authentic photographs (particularly high-resolution studio portraits) "
-            "or false negatives on novel generative models. A directional classification requires "
-            f"exceeding the {CONFIDENCE_THRESHOLD * 100:.0f}% confidence threshold and corroborating metadata review."
+            "false positives on authentic photographs or false negatives on novel generative models. "
+            "This result averages original and mirrored image views and requires both a "
+            f"{CONFIDENCE_THRESHOLD * 100:.0f}% top score and a 20-point class margin. "
+            "Inconclusive results should be reviewed with independent evidence."
         ),
     }
 
