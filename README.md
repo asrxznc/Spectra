@@ -91,15 +91,15 @@ The configured model is:
 
 `Ateeqq/ai-vs-human-image-detector`
 
-The Python implementation currently configures CPU inference (`device=-1`). The first model download and load can take time, depending on the machine and network.
+The Python implementation loads the model's explicit `id2label` mapping (`ai` and `hum`) with `AutoImageProcessor` and `AutoModelForImageClassification`. It evaluates both the original and horizontally mirrored image and averages the two probability vectors before applying the decision rule. This is more stable than relying on generic pipeline label formatting or a single image view. The first model download and load can take time, depending on the machine and network.
 
 ### 5. Verdict estimate
 
-The current application uses a 0.70 threshold:
+The current application uses a 0.70 top-score threshold plus a 0.20 class-separation margin:
 
-- **AI-Generated:** the mapped AI score is at least 70%.
-- **Human-Created:** the mapped human score is at least 70%.
-- **Inconclusive:** neither mapped score reaches 70%.
+- **AI-Generated:** AI is the higher score, reaches at least 70%, and leads human by at least 20 percentage points.
+- **Human-Created:** human is the higher score, reaches at least 70%, and leads AI by at least 20 percentage points.
+- **Inconclusive:** the model is not sufficiently confident or the two classes are too close.
 
 These labels are model outputs under a chosen decision rule. Scores must not be interpreted as calibrated probabilities or conclusive forensic evidence. The inference code maps model labels to AI/human categories; any unrecognized labels should be reviewed because they can affect the derived scores.
 
