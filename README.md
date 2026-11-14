@@ -23,6 +23,28 @@ It is designed to feel like a focused investigation console: register an exhibit
 
 The interface includes the home console, investigation overview, media intake, live analysis, findings, and investigation-record screens. The existing visual language, motion system, and interaction design are intentionally preserved.
 
+## A look inside the workstation
+
+These captures show the main flow as it is meant to feel: start at the console, register an image, then watch the evidence move through the inspection pipeline.
+
+### Home console
+
+The opening screen keeps the essentials close: launch an investigation, review records, and see the state of the local pipeline at a glance.
+
+![SPECTRA home console](docs/screenshots/home-console.png)
+
+### Media intake
+
+The intake screen is deliberately quiet. Drop in an image, confirm the supported format, and let SPECTRA handle hashing and inspection without sending the file to a third-party service.
+
+![SPECTRA media intake](docs/screenshots/analysis-intake.png)
+
+### Analysis in progress
+
+Once an exhibit is registered, the progress view makes the work visible: integrity validation completes first, followed by the classifier pass and report preparation.
+
+![SPECTRA analysis in progress](docs/screenshots/analysis-progress.png)
+
 ## How it works
 
 ```text
