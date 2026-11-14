@@ -4,8 +4,4 @@ node_modules
 .env
 .env.example
 npm-debug.log
-Dockerfile
-package-lock.json
-tsconfig.json
-server.ts
-metadata.json
+.smoke-*

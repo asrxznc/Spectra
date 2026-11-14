@@ -24,7 +24,7 @@ COPY requirements.txt /app/requirements.txt
 
 # Install CPU-optimized PyTorch first (drastically reduces image size compared to CUDA wheels)
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir torch>=2.2.0 torchvision>=0.17.0 --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir 'torch>=2.2.0' 'torchvision>=0.17.0' --index-url https://download.pytorch.org/whl/cpu && \
     pip install --no-cache-dir -r requirements.txt
 
 # Pre-cache the Hugging Face model weights during image build to eliminate cold-start download latency
@@ -37,6 +37,12 @@ COPY analysis_results/ /app/analysis_results/
 COPY analyze_media/ /app/analyze_media/
 COPY investigation_overview/ /app/investigation_overview/
 COPY investigation_reports/ /app/investigation_reports/
+
+# Run the inference process without root privileges.
+RUN useradd --create-home --uid 10001 spectra && \
+    mkdir -p /app/cache/huggingface && \
+    chown -R spectra:spectra /app
+USER spectra
 
 # Cloud Run container contract: expose port 8080 and run single worker process
 EXPOSE 8080

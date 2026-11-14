@@ -33,6 +33,7 @@ except ImportError:
 MODEL_ID = "Ateeqq/ai-vs-human-image-detector"
 CONFIDENCE_THRESHOLD = 0.70   # below this -> Inconclusive
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024   # 20 MB
+MAX_IMAGE_PIXELS = 40_000_000
 ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".webp"}
 
 logging.basicConfig(
@@ -186,9 +187,15 @@ def _classify(image: Image.Image) -> Dict[str, Any]:
 
 app = FastAPI(title="SPECTRA AI Media Forensics API", version="1.0.0")
 
+allowed_origins = [
+    origin.strip()
+    for origin in os.environ.get("CORS_ORIGINS", "").split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins or ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -222,13 +229,16 @@ async def classify_media(file: UploadFile = File(...)):
 
     try:
         raw_image = Image.open(io.BytesIO(image_bytes))
+        width, height = raw_image.size
+        if width * height > MAX_IMAGE_PIXELS:
+            raise ValueError(f"Image dimensions exceed the {MAX_IMAGE_PIXELS:,} pixel safety limit.")
         # Correct physical orientation using EXIF before feeding into the vision model
         try:
             raw_image = ImageOps.exif_transpose(raw_image)
         except Exception:
             pass
         image = raw_image.convert("RGB")
-    except (UnidentifiedImageError, Exception) as exc:
+    except Exception as exc:
         raise HTTPException(422, f"Cannot decode image: {exc}")
 
     try:

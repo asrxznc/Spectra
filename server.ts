@@ -39,7 +39,11 @@ const HOST = '0.0.0.0';
 const MODEL_ID = 'Ateeqq/ai-vs-human-image-detector';
 const CONFIDENCE_THRESHOLD = 0.70; // 70% threshold required for directional verdict
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024; // 20 MB
+const MAX_IMAGE_PIXELS = 40_000_000;
+const MAX_JOBS = 100;
 const ALLOWED_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp']);
+const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const RETENTION_MS = 24 * 60 * 60 * 1000;
 
 // In-memory job store
 interface JobResult {
@@ -79,11 +83,22 @@ const upload = multer({
   limits: { fileSize: MAX_UPLOAD_BYTES },
 });
 
-// Basic CORS & JSON
+const configuredOrigins = (process.env.CORS_ORIGINS || '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+// Basic CORS, security headers & JSON
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
+  const requestOrigin = req.headers.origin;
+  if (!requestOrigin || configuredOrigins.includes('*') || configuredOrigins.includes(requestOrigin)) {
+    res.header('Access-Control-Allow-Origin', requestOrigin || '*');
+  }
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.header('Access-Control-Allow-Headers', '*');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  res.header('X-Content-Type-Options', 'nosniff');
+  res.header('X-Frame-Options', 'DENY');
+  res.header('Referrer-Policy', 'no-referrer');
   if (req.method === 'OPTIONS') {
     return res.sendStatus(200);
   }
@@ -134,6 +149,54 @@ function extractBasicExif(buffer: Buffer): Record<string, string> {
     // Non-fatal metadata scan
   }
   return tags;
+}
+
+function validateUploadedImage(file: Express.Multer.File): { width: number; height: number; format: string } {
+  if (file.mimetype && file.mimetype !== 'application/octet-stream' && !ALLOWED_MIME.has(file.mimetype)) {
+    throw new Error(`Unsupported media type '${file.mimetype}'. Allowed: ${Array.from(ALLOWED_MIME).join(', ')}`);
+  }
+
+  const dimensions = imageSize(new Uint8Array(file.buffer));
+  const width = dimensions.width || 0;
+  const height = dimensions.height || 0;
+  const format = (dimensions.type || '').toLowerCase();
+  if (!width || !height || !format) {
+    throw new Error('The uploaded file is not a recognizable image.');
+  }
+  if (width * height > MAX_IMAGE_PIXELS) {
+    throw new Error(`Image dimensions exceed the ${MAX_IMAGE_PIXELS.toLocaleString()} pixel safety limit.`);
+  }
+
+  const expectedFormats: Record<string, string[]> = {
+    '.jpg': ['jpg', 'jpeg'],
+    '.jpeg': ['jpg', 'jpeg'],
+    '.png': ['png'],
+    '.webp': ['webp'],
+  };
+  const ext = path.extname(file.originalname).toLowerCase();
+  if (!expectedFormats[ext]?.includes(format)) {
+    throw new Error(`File extension '${ext}' does not match the detected image format '${format}'.`);
+  }
+
+  return { width, height, format: format.toUpperCase() };
+}
+
+function pruneJobs(): void {
+  const now = Date.now();
+  for (const [id, job] of JOBS.entries()) {
+    const timestamp = new Date(job.completed_at || job.created_at).getTime();
+    if (!isNaN(timestamp) && now - timestamp > RETENTION_MS) {
+      JOBS.delete(id);
+    }
+  }
+
+  if (JOBS.size < MAX_JOBS) return;
+  const removable = Array.from(JOBS.values())
+    .filter((job) => job.status === 'complete' || job.status === 'error')
+    .sort((a, b) => a.created_at.localeCompare(b.created_at));
+  while (JOBS.size >= MAX_JOBS && removable.length > 0) {
+    JOBS.delete(removable.shift()!.job_id);
+  }
 }
 
 // Helper: Process forensic classification via primary PyTorch classifier
@@ -390,6 +453,18 @@ app.post('/api/analyze', upload.single('file') as any, (req: Request, res: Respo
     });
   }
 
+  let validatedImage: { width: number; height: number; format: string };
+  try {
+    validatedImage = validateUploadedImage(file);
+  } catch (err: any) {
+    return res.status(422).json({ detail: err.message || 'Uploaded file is not a valid supported image.' });
+  }
+
+  pruneJobs();
+  if (JOBS.size >= MAX_JOBS) {
+    return res.status(503).json({ detail: 'The analysis queue is full. Try again shortly.' });
+  }
+
   const jobId = crypto.randomUUID();
   const fsDisplay =
     file.size >= 1024 * 1024
@@ -402,9 +477,9 @@ app.post('/api/analyze', upload.single('file') as any, (req: Request, res: Respo
     filename: file.originalname,
     mime_type: file.mimetype,
     sha256: null,
-    width: null,
-    height: null,
-    format: null,
+    width: validatedImage.width,
+    height: validatedImage.height,
+    format: validatedImage.format,
     filesize: file.size,
     filesize_display: fsDisplay,
     exif: {},
@@ -475,15 +550,7 @@ app.get('/api/jobs/:id/image', (req: Request, res: Response) => {
 });
 
 app.get('/api/history', (req: Request, res: Response) => {
-  // Prune any in-memory jobs older than 24 hours
-  const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
-  const now = Date.now();
-  for (const [id, job] of JOBS.entries()) {
-    const t = new Date(job.completed_at || job.created_at).getTime();
-    if (!isNaN(t) && now - t > TWENTY_FOUR_HOURS_MS) {
-      JOBS.delete(id);
-    }
-  }
+  pruneJobs();
 
   const allJobs = Array.from(JOBS.values());
   const completed = allJobs.filter((j) => j.status === 'complete');
@@ -529,6 +596,20 @@ app.get('/api/reports/:id', (req: Request, res: Response) => {
     `attachment; filename="SPECTRA_${safeName}_${job.job_id.slice(0, 8)}.txt"`
   );
   res.send(reportText);
+});
+
+app.use((err: any, req: Request, res: Response, next: express.NextFunction) => {
+  if (err instanceof multer.MulterError) {
+    const detail = err.code === 'LIMIT_FILE_SIZE'
+      ? `File too large. Maximum ${MAX_UPLOAD_BYTES / 1024 / 1024} MB.`
+      : `Upload rejected: ${err.message}`;
+    return res.status(413).json({ detail });
+  }
+  if (err) {
+    console.error('[SPECTRA] Unhandled request error:', err);
+    return res.status(500).json({ detail: 'Unexpected server error.' });
+  }
+  next();
 });
 
 // ── SCREEN ROUTES & STATIC SERVING ─────────────────────────────────────────

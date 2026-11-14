@@ -1,0 +1,27 @@
+FROM node:22-slim
+
+ENV PORT=8080
+
+WORKDIR /app
+
+COPY package.json bun.lock tsconfig.json ./
+RUN npm install --include=dev --omit=optional
+
+COPY server.ts ./
+COPY home/ ./home/
+COPY investigation_overview/ ./investigation_overview/
+COPY analyze_media/ ./analyze_media/
+COPY analysis_in_progress_scientific_forensics_globe/ ./analysis_in_progress_scientific_forensics_globe/
+COPY analysis_results/ ./analysis_results/
+COPY investigation_reports/ ./investigation_reports/
+COPY public/ ./public/
+
+RUN useradd --create-home --uid 10001 spectra && \
+    chown -R spectra:spectra /app
+USER spectra
+
+ENV NODE_ENV=production
+
+EXPOSE 8080
+
+CMD ["npm", "start"]
